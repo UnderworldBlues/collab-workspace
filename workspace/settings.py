@@ -135,9 +135,17 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')],
+            "hosts": [{
+                "address": os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0'),
+                "socket_timeout": None,
+            }],
         },
     },
 }
 
 AUTH_USER_MODEL = 'users.CustomUser'
+MAILERS = {
+    "default": {
+        "BACKEND": "django.core.mail.backends.console.EmailBackend",
+    }
+}

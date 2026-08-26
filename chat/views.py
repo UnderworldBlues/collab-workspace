@@ -1,6 +1,8 @@
+from django.http import request
 from rest_framework import viewsets
 from .models import Room, Message
 from .serializers import RoomSerializer, MessageSerializer
+from django.shortcuts import render
 
 class RoomViewSet(viewsets.ModelViewSet):
     queryset = Room.objects.all()
@@ -24,3 +26,6 @@ class MessageViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         #automatically set the sender to the currently logged-in user
         serializer.save(sender=self.request.user)
+
+def room_test_view(request, room_id):
+    return render(request, 'chat/room.html', {'room_id': room_id})
