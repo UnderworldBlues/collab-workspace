@@ -9,14 +9,37 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.room_id = self.scope['url_route']['kwargs']['room_id']
         self.room_group_name = f'chat_{self.room_id}'
+        user = self.scope['user']
 
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
         await self.accept()
+        #update status and broadcast to the room
+        if user.is_authenticated:
+            await self.update_user_status(user, 'online')
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'user_status_change',
+                    'user': user.username,
+                    'status': 'online'
+                }
+            )
 
     async def disconnect(self, close_code):
+        user = self.scope['user']
+        if user.is_authenticated:
+            await self.update_user_status(user, 'offline')
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'user_status_change',
+                    'user': user.username,
+                    'status': 'offline'
+                }
+            )
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
@@ -29,7 +52,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if action == 'send_message':
             message = text_data_json['message']
-            
             # Save message to database before broadcasting
             if user.is_authenticated:
                 await self.save_message(user, message)
@@ -42,7 +64,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         'sender': user.username
                     }
                 )
-
         elif action == 'set_typing':
             # Broadcast the typing status to the room
             if user.is_authenticated:
@@ -69,14 +90,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'user': event['user']
         }))
 
+    async def user_status_change(self, event):
+        await self.send(text_data=json.dumps({
+            'action': 'status_update',
+            'user': event['user'],
+            'status': event['status']
+        }))
+
     @database_sync_to_async
     def save_message(self, user, message_content):
         room = Room.objects.get(id=self.room_id)
         Message.objects.create(room=room, sender=user, content=message_content)
-
         # Scan the message for @username mentions
         mentions = re.findall(r'@(\w+)', message_content)
-        
         for mentioned_user in mentions:
             # Trigger the Celery task asynchronously
             send_mention_notification.delay(
@@ -84,3 +110,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 receiver_username=mentioned_user,
                 message_content=message_content
             )
+
+    @database_sync_to_async
+    def update_user_status(self, user, new_status):
+        if user.status != new_status:
+            user.status = new_status
+            user.save(update_fields=['status'])

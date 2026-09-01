@@ -22,6 +22,11 @@
                 chatLog.scrollTop = chatLog.scrollHeight;
             } else if (data.action === 'typing_indicator') {
                 typingIndicator.innerText = data.is_typing ? (data.user + " is typing...") : "";
+            } else if (data.action === 'status_update') {
+                const color = data.status === 'online' ? 'green' : 'red';
+                chatLog.innerHTML += `<div style="color: ${color}; font-size: 0.9em;">` + 
+                                     `<i>System: ${data.user} is now ${data.status}.</i></div>`;
+                chatLog.scrollTop = chatLog.scrollHeight;
             }
         };
         // Send chat message
