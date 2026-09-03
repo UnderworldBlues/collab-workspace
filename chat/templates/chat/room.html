@@ -9,40 +9,76 @@
     <button id="chat-message-submit">Send</button>
     <script>
         const roomId = "{{ room_id }}";
-        const chatSocket = new WebSocket('ws://' + window.location.host + '/ws/chat/' + roomId + '/');
         const chatLog = document.getElementById('chat-log');
         const typingIndicator = document.getElementById('typing-indicator');
         const messageInput = document.getElementById('chat-message-input');
+        let chatSocket = null;
         let typingTimeout;
-        // Listen for real time broadcasts
-        chatSocket.onmessage = function(e) {
-            const data = JSON.parse(e.data);
-            if (data.action === 'receive_message') {
-                chatLog.innerHTML += '<div><b>' + data.sender + ':</b> ' + data.message + '</div>';
+
+        // 1. Fetch historical messages via REST API
+        async function loadMessageHistory() {
+            try {
+                const response = await fetch(`/api/chat/messages/?room=${roomId}`);
+                const data = await response.json();
+                
+                // DRF pagination puts the actual items inside the "results" array
+                const messages = data.results;
+                
+                messages.forEach(msg => {
+                    chatLog.innerHTML += `<div><b>${msg.sender.username}:</b> ${msg.content}</div>`;
+                });
                 chatLog.scrollTop = chatLog.scrollHeight;
-            } else if (data.action === 'typing_indicator') {
-                typingIndicator.innerText = data.is_typing ? (data.user + " is typing...") : "";
-            } else if (data.action === 'status_update') {
-                const color = data.status === 'online' ? 'green' : 'red';
-                chatLog.innerHTML += `<div style="color: ${color}; font-size: 0.9em;">` + 
-                                     `<i>System: ${data.user} is now ${data.status}.</i></div>`;
-                chatLog.scrollTop = chatLog.scrollHeight;
+
+                // 2. Connect WebSocket ONLY AFTER history is loaded
+                connectWebSocket();
+            } catch (error) {
+                console.error("Failed to load history:", error);
             }
-        };
+        }
+
+        // 3. Establish Real-Time WebSocket Connection
+        function connectWebSocket() {
+            chatSocket = new WebSocket('ws://' + window.location.host + '/ws/chat/' + roomId + '/');
+
+            chatSocket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                
+                if (data.action === 'receive_message') {
+                    chatLog.innerHTML += `<div><b>${data.sender}:</b> ${data.message}</div>`;
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                } else if (data.action === 'typing_indicator') {
+                    typingIndicator.innerText = data.is_typing ? `${data.user} is typing...` : "";
+                } else if (data.action === 'status_update') {
+                    const color = data.status === 'online' ? 'green' : 'red';
+                    chatLog.innerHTML += `<div style="color: ${color}; font-size: 0.9em;">` + 
+                                         `<i>System: ${data.user} is now ${data.status}.</i></div>`;
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                }
+            };
+        }
+
         // Send chat message
         document.getElementById('chat-message-submit').onclick = function(e) {
-            chatSocket.send(JSON.stringify({ 'action': 'send_message', 'message': messageInput.value }));
-            messageInput.value = '';
-            chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': false }));
+            if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({ 'action': 'send_message', 'message': messageInput.value }));
+                messageInput.value = '';
+                chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': false }));
+            }
         };
+
         // Debounce typing indicator
         messageInput.addEventListener('input', function(e) {
-            chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': true }));
-            clearTimeout(typingTimeout);
-            typingTimeout = setTimeout(() => {
-                chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': false }));
-            }, 1000);
+            if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': true }));
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    chatSocket.send(JSON.stringify({ 'action': 'set_typing', 'is_typing': false }));
+                }, 1000);
+            }
         });
+
+        // Initialize the sequence
+        loadMessageHistory();
     </script>
 </body>
 </html>

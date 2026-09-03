@@ -3,10 +3,12 @@ from rest_framework import viewsets
 from .models import Room, Message
 from .serializers import RoomSerializer, MessageSerializer
 from django.shortcuts import render
+from rest_framework import viewsets, permissions
 
 class RoomViewSet(viewsets.ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
 class MessageViewSet(viewsets.ModelViewSet):
     queryset = Message.objects.all()
