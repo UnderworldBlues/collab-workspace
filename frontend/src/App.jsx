@@ -1,12 +1,21 @@
+import { BrowserRouter as Router, Routes, Route, useParams, Navigate } from 'react-router-dom';
 import ChatRoom from './ChatRoom';
 
-function App() {
-  return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>Django + React Workspace</h1>
-      <ChatRoom roomId={1} />
-    </div>
-  );
+function RoomWrapper() {
+  const { roomId } = useParams();
+  return <ChatRoom roomId={roomId} />;
 }
 
-export default App;
+export default function App() {
+  return (
+    <Router>
+      <Routes>
+        {/* Automatically redirect the base URL to Room 1 for testing */}
+        <Route path="/" element={<Navigate to="/room/1" replace />} />
+        
+        {/* Dynamic route that loads the chat room based on the URL parameter */}
+        <Route path="/room/:roomId" element={<RoomWrapper />} />
+      </Routes>
+    </Router>
+  );
+}

@@ -1,42 +1,46 @@
-// frontend/src/ChatRoom.jsx
 import { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import api from './api';
 
 export default function ChatRoom({ roomId }) {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [token, setToken] = useState(localStorage.getItem('access_token'));
     const ws = useRef(null);
+    
+    useEffect(() => {
+        if (!token) return;
+        api.get(`/api/chat/messages/?room=${roomId}`)
+            .then(response => {
+                setMessages(response.data.results);
+            })
+            .catch(err => console.error("Error fetching history:", err));
+    }, [roomId, token]);
 
-    // Temporary mock login function
-    const handleLogin = async (e) => {
+const handleLogin = async (e) => {
         e.preventDefault();
         try {
-            const response = await axios.post('http://localhost:8000/api/token/', {
-                username: e.target.username.value,
-                password: e.target.password.value
+            const response = await api.post('http://localhost:8000/api/token/', {
+                username,
+                password
             });
-            const accessToken = response.data.access;
-            localStorage.setItem('access_token', accessToken);
-            setToken(accessToken);
+            const { access, refresh } = response.data;
+            localStorage.setItem('access_token', access);
+            localStorage.setItem('refresh_token', refresh);
+            setToken(access);
         } catch (error) {
-            alert("Login failed!");
+            console.error("Login failed", error);
         }
     };
 
     useEffect(() => {
-        if (!token) return; // Do not connect if not logged in
+        if (!token) return;
 
-        // 1. Fetch history using the Authorization header
         axios.get(`http://localhost:8000/api/chat/messages/?room=${roomId}`, {
             headers: { Authorization: `Bearer ${token}` }
         })
         .then(response => setMessages(response.data.results))
         .catch(err => console.error("Error fetching history:", err));
-
-        // 2. Connect WebSocket with token in the query string
         ws.current = new WebSocket(`ws://localhost:8000/ws/chat/${roomId}/?token=${token}`);
-
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.action === 'receive_message') {
@@ -51,8 +55,6 @@ export default function ChatRoom({ roomId }) {
             if (ws.current) ws.current.close();
         };
     }, [roomId, token]);
-
-    // If no token exists, render a login form instead of the chat
     if (!token) {
         return (
             <form onSubmit={handleLogin}>
@@ -63,7 +65,6 @@ export default function ChatRoom({ roomId }) {
             </form>
         );
     }
-
     return (
         <div>
             <h2>Room: {roomId}</h2>
