@@ -5,92 +5,110 @@ from channels.db import database_sync_to_async
 from .models import Room, Message
 from .tasks import send_mention_notification
 
-class ChatConsumer(AsyncWebsocketConsumer):
+class WorkspaceConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.room_id = self.scope['url_route']['kwargs']['room_id']
-        self.room_group_name = f'chat_{self.room_id}'
-        user = self.scope['user']
+        self.user = self.scope['user']
+        self.global_group = 'global_workspace'
 
-        if not user.is_authenticated:
+        if not self.user.is_authenticated:
             await self.accept()
             await self.close(code=4001)
             return
-
+        
         await self.channel_layer.group_add(
-            self.room_group_name,
+            self.global_group,
             self.channel_name
         )
         await self.accept()
-        await self.update_user_status(user, 'online')
+        await self.update_user_status(self.user, 'online')
         await self.channel_layer.group_send(
-            self.room_group_name,
+            self.global_group,
             {
                 'type': 'user_status_change',
-                'user': user.username,
+                'user': self.user.username,
                 'status': 'online'
             }
         )
 
     async def disconnect(self, close_code):
-        user = self.scope['user']
-        if user.is_authenticated:
-            await self.update_user_status(user, 'offline')
+        if self.user.is_authenticated:
+            await self.update_user_status(self.user, 'offline')
             await self.channel_layer.group_send(
-                self.room_group_name,
+                self.global_group,
                 {
                     'type': 'user_status_change',
-                    'user': user.username,
+                    'user': self.user.username,
                     'status': 'offline'
                 }
             )
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name
-        )
+            await self.channel_layer.group_discard(
+                self.global_group,
+                self.channel_name
+            )
 
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
         action = text_data_json.get('action')
-        user = self.scope['user']
 
-        if action == 'send_message':
+        # handle dynamic room joining
+        if action == 'join_room':
+            room_id = text_data_json['room_id']
+            room_group_name = f'chat_{room_id}'
+            await self.channel_layer.group_add(
+                room_group_name,
+                self.channel_name
+            )
+        # handle dynamic room leaving
+        elif action == 'leave_room':
+            room_id = text_data_json['room_id']
+            room_group_name = f'chat_{room_id}'
+            await self.channel_layer.group_discard(
+                room_group_name,
+                self.channel_name
+            )
+        #sending a message requires the room id in payload
+        elif action == 'send_message':
+            room_id = text_data_json['room_id']
             message = text_data_json['message']
-            # Save message to database before broadcasting
-            if user.is_authenticated:
-                await self.save_message(user, message)
-
-                await self.channel_layer.group_send(
-                    self.room_group_name,
-                    {
-                        'type': 'chat_message',
-                        'message': message,
-                        'sender': user.username
-                    }
-                )
+            room_group_name = f'chat_{room_id}'
+            await self.save_message(self.user, room_id, message)
+            await self.channel_layer.group_send(
+                room_group_name,
+                {
+                    'type': 'chat_message',
+                    'message': message,
+                    'sender': self.user.username,
+                    'room_id': room_id
+                }
+            )
+        #sending a message requires the room id
         elif action == 'set_typing':
-            # Broadcast the typing status to the room
-            if user.is_authenticated:
-                await self.channel_layer.group_send(
-                    self.room_group_name,
-                    {
-                        'type': 'user_typing',
-                        'is_typing': text_data_json['is_typing'],
-                        'user': user.username
-                    }
-                )
+            room_id = text_data_json['room_id']
+            room_group_name = f'chat_{room_id}'
+            await self.channel_layer.group_send(
+                room_group_name,
+                {
+                    'type': 'user_typing',
+                    'is_typing': text_data_json['is_typing'],
+                    'user': self.user.username,
+                    'room_id': room_id
+                }
+            )
 
     async def chat_message(self, event):
         await self.send(text_data=json.dumps({
             'action': 'receive_message',
             'message': event['message'],
-            'sender': event['sender']
+            'sender': event['sender'],
+            'room_id': event['room_id']
         }))
 
     async def user_typing(self, event):
         await self.send(text_data=json.dumps({
             'action': 'typing_indicator',
             'is_typing': event['is_typing'],
-            'user': event['user']
+            'user': event['user'],
+            'room_id': event['room_id']
         }))
 
     async def user_status_change(self, event):
@@ -101,13 +119,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     @database_sync_to_async
-    def save_message(self, user, message_content):
-        room = Room.objects.get(id=self.room_id)
+    def save_message(self, user, room_id, message_content):
+        room = Room.objects.get(id=room_id)
         Message.objects.create(room=room, sender=user, content=message_content)
-        # Scan the message for @username mentions
         mentions = re.findall(r'@(\w+)', message_content)
         for mentioned_user in mentions:
-            # Trigger the Celery task asynchronously
             send_mention_notification.delay(
                 sender_username=user.username,
                 receiver_username=mentioned_user,

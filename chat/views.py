@@ -1,9 +1,17 @@
 from django.http import request
 from rest_framework import viewsets
+from django.contrib.auth import get_user_model
 from .models import Room, Message
-from .serializers import RoomSerializer, MessageSerializer
+from .serializers import RoomSerializer, MessageSerializer, UserSerializer
 from django.shortcuts import render
 from rest_framework import viewsets, permissions
+
+User = get_user_model()
+
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only endpoint to list all users and their current status."""
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
 
 class RoomViewSet(viewsets.ModelViewSet):
     queryset = Room.objects.all()
