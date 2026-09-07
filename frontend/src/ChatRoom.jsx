@@ -6,14 +6,55 @@ export default function ChatRoom({ roomId }) {
     const [input, setInput] = useState("");
     const [token, setToken] = useState(localStorage.getItem('access_token'));
     const ws = useRef(null);
-    
+
     useEffect(() => {
         if (!token) return;
+
+        let isMounted = true;
+
+        // 1. Fetch History
         api.get(`/api/chat/messages/?room=${roomId}`)
             .then(response => {
-                setMessages(response.data.results);
+                if (isMounted) setMessages(response.data.results);
             })
             .catch(err => console.error("Error fetching history:", err));
+
+        // 2. Connect WebSocket using the most recent token from localStorage
+        const currentToken = localStorage.getItem('access_token');
+        ws.current = new WebSocket(`ws://localhost:8000/ws/chat/${roomId}/?token=${currentToken}`);
+
+        ws.current.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.action === 'receive_message') {
+                setMessages(prev => [...prev, { sender: { username: data.sender }, content: data.message }]);
+            }
+        };
+
+        // 3. Handle Expiration and Reconnection
+        ws.current.onclose = async (event) => {
+            if (!isMounted) return;
+
+            // If Django rejected the token (Code 4001)
+            if (event.code === 4001) {
+                console.log("WebSocket token expired. Attempting refresh...");
+                try {
+                    // Ping a secure REST endpoint to force the Axios interceptor to run
+                    await api.get(`/api/chat/rooms/`);
+                    
+                    // If successful, the interceptor saved a fresh token to localStorage.
+                    // Updating this state forces the entire useEffect to re-run and reconnect!
+                    setToken(localStorage.getItem('access_token'));
+                } catch (error) {
+                    console.error("Session completely expired. Please log in again.");
+                    setToken(null);
+                }
+            }
+        };
+
+        return () => {
+            isMounted = false;
+            if (ws.current) ws.current.close();
+        };
     }, [roomId, token]);
 
 const handleLogin = async (e) => {
