@@ -9,7 +9,6 @@ class WorkspaceConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope['user']
         self.global_group = 'global_workspace'
-
         if not self.user.is_authenticated:
             await self.accept()
             await self.close(code=4001)
@@ -49,8 +48,6 @@ class WorkspaceConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
         action = text_data_json.get('action')
-
-        # handle dynamic room joining
         if action == 'join_room':
             room_id = text_data_json['room_id']
             room_group_name = f'chat_{room_id}'
@@ -58,7 +55,6 @@ class WorkspaceConsumer(AsyncWebsocketConsumer):
                 room_group_name,
                 self.channel_name
             )
-        # handle dynamic room leaving
         elif action == 'leave_room':
             room_id = text_data_json['room_id']
             room_group_name = f'chat_{room_id}'
@@ -66,7 +62,6 @@ class WorkspaceConsumer(AsyncWebsocketConsumer):
                 room_group_name,
                 self.channel_name
             )
-        #sending a message requires the room id in payload
         elif action == 'send_message':
             room_id = text_data_json['room_id']
             message = text_data_json['message']
@@ -81,7 +76,6 @@ class WorkspaceConsumer(AsyncWebsocketConsumer):
                     'room_id': room_id
                 }
             )
-        #sending a message requires the room id
         elif action == 'set_typing':
             room_id = text_data_json['room_id']
             room_group_name = f'chat_{room_id}'

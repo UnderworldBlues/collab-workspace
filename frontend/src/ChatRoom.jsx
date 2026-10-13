@@ -1,130 +1,121 @@
 import { useState, useEffect, useRef } from 'react';
 import api from './api';
+import { useWorkspace } from './WorkspaceContext';
 
 export default function ChatRoom({ roomId }) {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
-    const [token, setToken] = useState(localStorage.getItem('access_token'));
-    const ws = useRef(null);
+    const { ws, latestMessage, isConnected } = useWorkspace();
+    const messagesEndRef = useRef(null);
 
     useEffect(() => {
-        if (!token) return;
-
         let isMounted = true;
+        api.get(`/api/chat/messages/?room=${roomId}`).then(res => {
+            if (isMounted) setMessages(res.data.results || res.data);
+        }).catch(err => console.error("Error fetching history:", err));
+        
+        return () => { isMounted = false; };
+    }, [roomId]);
 
-        // 1. Fetch History
-        api.get(`/api/chat/messages/?room=${roomId}`)
-            .then(response => {
-                if (isMounted) setMessages(response.data.results);
-            })
-            .catch(err => console.error("Error fetching history:", err));
-
-        // 2. Connect WebSocket using the most recent token from localStorage
-        const currentToken = localStorage.getItem('access_token');
-        ws.current = new WebSocket(`ws://localhost:8000/ws/chat/${roomId}/?token=${currentToken}`);
-
-        ws.current.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.action === 'receive_message') {
-                setMessages(prev => [...prev, { sender: { username: data.sender }, content: data.message }]);
-            }
-        };
-
-        // 3. Handle Expiration and Reconnection
-        ws.current.onclose = async (event) => {
-            if (!isMounted) return;
-
-            // If Django rejected the token (Code 4001)
-            if (event.code === 4001) {
-                console.log("WebSocket token expired. Attempting refresh...");
-                try {
-                    // Ping a secure REST endpoint to force the Axios interceptor to run
-                    await api.get(`/api/chat/rooms/`);
-                    
-                    // If successful, the interceptor saved a fresh token to localStorage.
-                    // Updating this state forces the entire useEffect to re-run and reconnect!
-                    setToken(localStorage.getItem('access_token'));
-                } catch (error) {
-                    console.error("Session completely expired. Please log in again.");
-                    setToken(null);
+    useEffect(() => {
+        if (isConnected && ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify({ action: "join_room", room_id: roomId }));
+            
+            return () => {
+                if (ws.current?.readyState === WebSocket.OPEN) {
+                    ws.current.send(JSON.stringify({ action: "leave_room", room_id: roomId }));
                 }
-            }
-        };
+            };
+        }
+    }, [roomId, isConnected, ws]);
 
-        return () => {
-            isMounted = false;
-            if (ws.current) ws.current.close();
-        };
-    }, [roomId, token]);
-
-const handleLogin = async (e) => {
+    useEffect(() => {
+        if (latestMessage?.action === 'receive_message' && latestMessage.room_id == roomId) {
+            setMessages(prev => [...prev, { 
+                sender: { username: latestMessage.sender }, 
+                content: latestMessage.message 
+            }]);
+        }
+    }, [latestMessage, roomId]);
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+    const sendMessage = (e) => {
         e.preventDefault();
-        try {
-            const response = await api.post('http://localhost:8000/api/token/', {
-                username,
-                password
-            });
-            const { access, refresh } = response.data;
-            localStorage.setItem('access_token', access);
-            localStorage.setItem('refresh_token', refresh);
-            setToken(access);
-        } catch (error) {
-            console.error("Login failed", error);
+        if (input.trim() && ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify({
+                action: "send_message",
+                room_id: roomId,
+                message: input
+            }));
+            setInput("");
         }
     };
 
-    useEffect(() => {
-        if (!token) return;
-
-        axios.get(`http://localhost:8000/api/chat/messages/?room=${roomId}`, {
-            headers: { Authorization: `Bearer ${token}` }
-        })
-        .then(response => setMessages(response.data.results))
-        .catch(err => console.error("Error fetching history:", err));
-        ws.current = new WebSocket(`ws://localhost:8000/ws/chat/${roomId}/?token=${token}`);
-        ws.current.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.action === 'receive_message') {
-                setMessages(prev => [...prev, {
-                    sender: { username: data.sender },
-                    content: data.message
-                }]);
-            }
-        };
-
-        return () => {
-            if (ws.current) ws.current.close();
-        };
-    }, [roomId, token]);
-    if (!token) {
-        return (
-            <form onSubmit={handleLogin}>
-                <h2>Login to Chat</h2>
-                <input name="username" placeholder="Username" required />
-                <input name="password" type="password" placeholder="Password" required />
-                <button type="submit">Login</button>
-            </form>
-        );
-    }
     return (
-        <div>
-            <h2>Room: {roomId}</h2>
-            <div style={{ height: '300px', overflowY: 'scroll', border: '1px solid black', padding: '10px' }}>
-                {messages.map((msg, index) => (
-                    <div key={index}>
-                        <b>{msg.sender.username}:</b> {msg.content}
+        <div className="flex flex-col h-full bg-slate-900">
+            {/* Top Header */}
+            <header className="h-14 px-6 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center space-x-2">
+                    <span className="text-slate-400 text-lg font-semibold">#</span>
+                    <h2 className="font-semibold text-white">Room {roomId}</h2>
+                </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                    isConnected 
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                    {isConnected ? 'Connected' : 'Reconnecting...'}
+                </span>
+            </header>
+            {/* Message Feed */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {messages?.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-slate-500 text-sm">
+                        No messages in this room yet. Say hello!
                     </div>
-                ))}
+                ) : (
+                    messages?.map((msg, index) => (
+                        <div key={index} className="flex items-start space-x-3 group">
+                            {/* Avatar Initial Placeholder */}
+                            <div className="w-9 h-9 rounded-full bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-semibold text-sm shrink-0 uppercase">
+                                {msg.sender?.username?.[0] || '?'}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-baseline space-x-2">
+                                    <span className="font-medium text-sm text-slate-200">
+                                        {msg.sender?.username}
+                                    </span>
+                                </div>
+                                <p className="text-slate-300 text-sm mt-0.5 break-words leading-relaxed">
+                                    {msg.content}
+                                </p>
+                            </div>
+                        </div>
+                    ))
+                )}
+                <div ref={messagesEndRef} />
             </div>
-            <input 
-                value={input} 
-                onChange={(e) => setInput(e.target.value)} 
-                placeholder="Type a message..." 
-            />
-            <button onClick={() => {
-                ws.current.send(JSON.stringify({ action: "send_message", message: input }));
-                setInput("");
-            }}>Send</button>
+
+            {/* Message Input Bar */}
+            <form onSubmit={sendMessage} className="p-4 border-t border-slate-800 bg-slate-900/50">
+                <div className="flex items-center space-x-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
+                    <input
+                        type="text"
+                        className="flex-1 bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        placeholder={`Message #Room ${roomId}...`}
+                    />
+                    <button
+                        type="submit"
+                        disabled={!input.trim()}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white text-xs font-semibold rounded-md transition-colors cursor-pointer"
+                    >
+                        Send
+                    </button>
+                </div>
+            </form>
         </div>
     );
 }
